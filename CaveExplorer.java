@@ -1,6 +1,7 @@
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.util.Scanner;
+import java.util.Stack;
 
 public class CaveExplorer {
 	// Direction order: north, south, east, west
@@ -9,8 +10,24 @@ public class CaveExplorer {
 	private static final char[] DIR_CHAR = {'n', 's', 'e', 'w'};
 
 	private char[][] cave;
-	private StringBuilder path = new StringBuilder();
+	private String path = "";
 	private boolean solved = false;
+
+	// One pending move on the stack: the cell to visit and the exact directions
+	// taken from 'S' to get there. Keeping the path with each move means a dead
+	// end never contaminates the answer: when we pop a different move, its own
+	// path is already correct.
+	private static class Move {
+		int row;
+		int col;
+		String path;
+
+		Move(int row, int col, String path) {
+			this.row = row;
+			this.col = col;
+			this.path = path;
+		}
+	}
 
 	// Step 1: Zero parameter constructor to create the specified cave
 	public CaveExplorer() {
@@ -37,55 +54,87 @@ public class CaveExplorer {
 		return sb.toString();
 	}
 
-	// Step 3: solve method
-	// Depth-first search from 'S'. Cells on the current path are marked with '*',
-	// and the mark is removed when we back out of a dead end, so the final layout
-	// shows only the successful path. 'S' and 'M' are never overwritten.
+	// Step 3: solve method (stack-based search with backtracking)
+	// Pop a move, then push every unvisited open neighbor. Branch points push two
+	// or three moves; if the explorer hits a dead end, nothing new is pushed and
+	// the next pop resumes from the most recent unexplored branch.
+	// Neighbors are pushed in reverse so moves are tried in order N, S, E, W.
 	public boolean solve() {
 		clearMarks();
-		path = new StringBuilder();
+		path = "";
 		solved = false;
 
+		int startRow = -1;
+		int startCol = -1;
 		for (int r = 0; r < cave.length; r++) {
 			for (int c = 0; c < cave[r].length; c++) {
 				if (cave[r][c] == 'S') {
-					solved = explore(r, c);
-					if (!solved) {
-						path = new StringBuilder();
-					}
-					return solved;
+					startRow = r;
+					startCol = c;
 				}
 			}
 		}
-		return false; // no starting point
-	}
+		if (startRow == -1) {
+			return false; // no starting point
+		}
 
-	// Tries all four directions from (r, c). Returns true if the mirror pool is reached.
-	private boolean explore(int r, int c) {
-		for (int d = 0; d < 4; d++) {
-			int nr = r + ROW_STEP[d];
-			int nc = c + COL_STEP[d];
+		boolean[][] visited = new boolean[cave.length][];
+		for (int r = 0; r < cave.length; r++) {
+			visited[r] = new boolean[cave[r].length];
+		}
 
-			if (nr < 0 || nr >= cave.length || nc < 0 || nc >= cave[nr].length) {
-				continue;
-			}
+		Stack<Move> stack = new Stack<Move>();
+		visited[startRow][startCol] = true;
+		stack.push(new Move(startRow, startCol, ""));
 
-			char next = cave[nr][nc];
-			if (next == 'M') {
-				path.append(DIR_CHAR[d]);
-				return true;
-			}
-			if (next == '.') {
-				cave[nr][nc] = '*';          // mark visited so we never loop
-				path.append(DIR_CHAR[d]);
-				if (explore(nr, nc)) {
+		while (!stack.isEmpty()) {
+			Move cur = stack.pop();
+
+			for (int d = 3; d >= 0; d--) {
+				int nr = cur.row + ROW_STEP[d];
+				int nc = cur.col + COL_STEP[d];
+
+				if (nr < 0 || nr >= cave.length || nc < 0 || nc >= cave[nr].length) {
+					continue;
+				}
+				if (visited[nr][nc]) {
+					continue;
+				}
+
+				char next = cave[nr][nc];
+				if (next == 'M') {
+					path = cur.path + DIR_CHAR[d];
+					solved = true;
+					markPath(startRow, startCol);
 					return true;
 				}
-				path.deleteCharAt(path.length() - 1); // dead end: back up
-				cave[nr][nc] = '.';
+				if (next == '.') {
+					visited[nr][nc] = true; // never queue the same cell twice
+					stack.push(new Move(nr, nc, cur.path + DIR_CHAR[d]));
+				}
 			}
 		}
-		return false;
+		return false; // stack empty: every reachable cell explored, no mirror pool
+	}
+
+	// Walks the finished path from 'S' and marks each step with '*'.
+	// The last move lands on 'M', so it is not marked. Dead ends are never marked.
+	private void markPath(int r, int c) {
+		for (int i = 0; i < path.length() - 1; i++) {
+			int d = directionIndex(path.charAt(i));
+			r += ROW_STEP[d];
+			c += COL_STEP[d];
+			cave[r][c] = '*';
+		}
+	}
+
+	private int directionIndex(char ch) {
+		for (int d = 0; d < DIR_CHAR.length; d++) {
+			if (DIR_CHAR[d] == ch) {
+				return d;
+			}
+		}
+		return -1;
 	}
 
 	// Removes path marks left over from an earlier call to solve
@@ -99,10 +148,10 @@ public class CaveExplorer {
 		}
 	}
 
-	// Step 4: getPath method
+	// Step 4: getPath method (exact path only, no dead ends)
 	public String getPath() {
 		if (solved) {
-			return path.toString();
+			return path;
 		}
 		return "";
 	}
@@ -113,7 +162,7 @@ public class CaveExplorer {
 
 		int rows = in.nextInt();
 		int cols = in.nextInt();
-		String s = in.nextLine(); // Skip newline character
+		in.nextLine(); // Skip newline character
 
 		// Construct cave and populate with rest of data in the file
 		cave = new char[rows][cols];
@@ -151,21 +200,28 @@ public class CaveExplorer {
 	public static void main(String[] args) {
 		System.out.println("Starting CaveExplorer");
 
-		// Create a CaveExplorer object, print the starting layout, solve, print results
-		CaveExplorer ce1 = new CaveExplorer();
-		runCave("Hardcoded cave", ce1);
+		// Test 1: hardcoded cave, no branches
+		runCave("Test 1: hardcoded cave (no branches)", new CaveExplorer());
 
-		// Step 5/6: Repeat for a different CaveExplorer object read from a file
-		String fileName = "testdat.txt";
-		try {
-			CaveExplorer ce2 = new CaveExplorer(fileName);
-			runCave("Cave from " + fileName, ce2);
-		}
-		catch (FileNotFoundException e) {
-			System.out.println("Can't find file " + fileName);
-		}
-		catch (Exception e) {
-			System.out.println("Other error: " + e.getMessage());
+		// Tests 2-4: caves read from files
+		String[] fileNames = {"cave_branch.txt", "cave_maze.txt", "cave_nopath.txt"};
+		String[] titles = {
+			"Test 2: two dead-end branches at the start",
+			"Test 3: larger cave, several dead ends",
+			"Test 4: no path to the mirror pool"
+		};
+
+		for (int i = 0; i < fileNames.length; i++) {
+			try {
+				CaveExplorer ce = new CaveExplorer(fileNames[i]);
+				runCave(titles[i], ce);
+			}
+			catch (FileNotFoundException e) {
+				System.out.println("Can't find file " + fileNames[i]);
+			}
+			catch (Exception e) {
+				System.out.println("Other error: " + e.getMessage());
+			}
 		}
 
 		System.out.println("Finished CaveExplorer");
